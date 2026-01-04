@@ -4,6 +4,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 // HOPX MCP Server - Per-connection authentication
 // Each request's Bearer token is extracted and used for HOPX API calls.
+// Implements full feature parity with https://github.com/hopx-ai/mcp
 
 // AsyncLocalStorage to pass the API key to tool handlers
 const apiKeyStorage = new AsyncLocalStorage<string | null>();
@@ -39,72 +40,72 @@ async function hopxFetch(
   return response;
 }
 
+// Helper for standard tool response
+function toolResponse(text: string) {
+  return { content: [{ type: "text" as const, text }] };
+}
+
+// Helper for error responses
+function errorResponse(action: string, error: unknown) {
+  return toolResponse(`Failed to ${action}: ${error instanceof Error ? error.message : String(error)}`);
+}
+
 // Create the MCP handler with tools
 const mcpHandler = createMcpHandler(
   async (server) => {
-    // ---------- System ----------
+    // ========== System ==========
     server.registerTool(
       "health",
       {
         title: "health",
-        description: "Check health status of the HOPX API and verify authentication.",
+        description: "GET /health — Check health status of the HOPX API and verify authentication.",
         inputSchema: z.object({}),
       },
       async () => {
         const apiKey = getApiKey();
         if (!apiKey) {
-          return {
-            content: [{ type: "text", text: "Error: No HOPX API key provided. Please configure your API key in the MCP server settings." }],
-          };
+          return toolResponse("Error: No HOPX API key provided. Please configure your API key in the MCP server settings.");
         }
 
         try {
           const response = await hopxFetch("/health");
           const data = await response.json();
-          return {
-            content: [{ type: "text", text: `HOPX API Status: ${JSON.stringify(data, null, 2)}\nAuthenticated: Yes (API key: ${apiKey.substring(0, 8)}...)` }],
-          };
+          return toolResponse(`HOPX API Status: ${JSON.stringify(data, null, 2)}\nAuthenticated: Yes (API key: ${apiKey.substring(0, 8)}...)`);
         } catch (error) {
-          return {
-            content: [{ type: "text", text: `HOPX API health check failed: ${error instanceof Error ? error.message : String(error)}` }],
-          };
+          return errorResponse("check HOPX API health", error);
         }
       }
     );
 
-    // ---------- Sandboxes ----------
+    // ========== Sandboxes ==========
     server.registerTool(
       "list_sandboxes",
       {
         title: "list_sandboxes",
-        description: "GET /v1/sandboxes — list all sandboxes for the authenticated user.",
+        description: "GET /v1/sandboxes — List all sandboxes with their current status, configuration, and metadata.",
         inputSchema: z.object({
           limit: z.number().optional().describe("Maximum number of sandboxes to return (default: 100)"),
           status: z.string().optional().describe("Filter by status: 'running', 'stopped', 'paused', or 'creating'"),
+          region: z.string().optional().describe("Filter by region (e.g., 'us-east', 'eu-west')"),
         }),
       },
-      async ({ limit, status }) => {
+      async ({ limit, status, region }) => {
         try {
           const params = new URLSearchParams();
           if (limit) params.set("limit", String(limit));
           if (status) params.set("status", status);
+          if (region) params.set("region", region);
 
           const response = await hopxFetch(`/v1/sandboxes?${params.toString()}`);
           const data = await response.json();
 
           if (!response.ok) {
-            return {
-              content: [{ type: "text", text: `Error listing sandboxes: ${JSON.stringify(data)}` }],
-            };
+            return toolResponse(`Error listing sandboxes: ${JSON.stringify(data)}`);
           }
 
-          return {
-            content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
-          };
+          return toolResponse(JSON.stringify(data, null, 2));
         } catch (error) {
-          return {
-            content: [{ type: "text", text: `Failed to list sandboxes: ${error instanceof Error ? error.message : String(error)}` }],
-          };
+          return errorResponse("list sandboxes", error);
         }
       }
     );
@@ -113,7 +114,7 @@ const mcpHandler = createMcpHandler(
       "create_sandbox",
       {
         title: "create_sandbox",
-        description: "POST /v1/sandboxes — create a new sandbox. Use list_templates first to find available templates.",
+        description: "POST /v1/sandboxes — Create a new sandbox. First use list_templates() to find available templates.",
         inputSchema: z.object({
           template_id: z.string().describe("Template ID or name (e.g., 'code-interpreter')"),
           region: z.string().optional().describe("Deployment region, e.g., 'us-east', 'eu-west'"),
@@ -138,18 +139,12 @@ const mcpHandler = createMcpHandler(
           const data = await response.json();
 
           if (!response.ok) {
-            return {
-              content: [{ type: "text", text: `Error creating sandbox: ${JSON.stringify(data)}` }],
-            };
+            return toolResponse(`Error creating sandbox: ${JSON.stringify(data)}`);
           }
 
-          return {
-            content: [{ type: "text", text: `Sandbox created successfully:\n${JSON.stringify(data, null, 2)}` }],
-          };
+          return toolResponse(`Sandbox created successfully:\n${JSON.stringify(data, null, 2)}`);
         } catch (error) {
-          return {
-            content: [{ type: "text", text: `Failed to create sandbox: ${error instanceof Error ? error.message : String(error)}` }],
-          };
+          return errorResponse("create sandbox", error);
         }
       }
     );
@@ -158,7 +153,7 @@ const mcpHandler = createMcpHandler(
       "get_sandbox",
       {
         title: "get_sandbox",
-        description: "GET /v1/sandboxes/{id} — get detailed sandbox information.",
+        description: "GET /v1/sandboxes/{id} — Get detailed sandbox information including status, resource usage, and connection info.",
         inputSchema: z.object({
           id: z.string().describe("Sandbox ID"),
         }),
@@ -169,18 +164,12 @@ const mcpHandler = createMcpHandler(
           const data = await response.json();
 
           if (!response.ok) {
-            return {
-              content: [{ type: "text", text: `Error getting sandbox: ${JSON.stringify(data)}` }],
-            };
+            return toolResponse(`Error getting sandbox: ${JSON.stringify(data)}`);
           }
 
-          return {
-            content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
-          };
+          return toolResponse(JSON.stringify(data, null, 2));
         } catch (error) {
-          return {
-            content: [{ type: "text", text: `Failed to get sandbox: ${error instanceof Error ? error.message : String(error)}` }],
-          };
+          return errorResponse("get sandbox", error);
         }
       }
     );
@@ -189,7 +178,7 @@ const mcpHandler = createMcpHandler(
       "delete_sandbox",
       {
         title: "delete_sandbox",
-        description: "DELETE /v1/sandboxes/{id} — permanently delete a sandbox.",
+        description: "DELETE /v1/sandboxes/{id} — Permanently delete a sandbox.",
         inputSchema: z.object({
           id: z.string().describe("Sandbox ID to delete"),
         }),
@@ -202,115 +191,320 @@ const mcpHandler = createMcpHandler(
 
           if (!response.ok) {
             const data = await response.json();
-            return {
-              content: [{ type: "text", text: `Error deleting sandbox: ${JSON.stringify(data)}` }],
-            };
+            return toolResponse(`Error deleting sandbox: ${JSON.stringify(data)}`);
           }
 
-          return {
-            content: [{ type: "text", text: `Sandbox ${id} deleted successfully.` }],
-          };
+          return toolResponse(`Sandbox ${id} deleted successfully.`);
         } catch (error) {
-          return {
-            content: [{ type: "text", text: `Failed to delete sandbox: ${error instanceof Error ? error.message : String(error)}` }],
-          };
+          return errorResponse("delete sandbox", error);
         }
       }
     );
 
-    // ---------- Templates ----------
+    server.registerTool(
+      "update_sandbox_timeout",
+      {
+        title: "update_sandbox_timeout",
+        description: "PUT /v1/sandboxes/{id}/timeout — Extend or modify sandbox timeout.",
+        inputSchema: z.object({
+          id: z.string().describe("Sandbox ID"),
+          timeout_seconds: z.number().describe("New timeout in seconds"),
+        }),
+      },
+      async ({ id, timeout_seconds }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${id}/timeout`, {
+            method: "PUT",
+            body: JSON.stringify({ timeout_seconds }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error updating timeout: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(`Sandbox ${id} timeout updated to ${timeout_seconds} seconds.`);
+        } catch (error) {
+          return errorResponse("update sandbox timeout", error);
+        }
+      }
+    );
+
+    server.registerTool(
+      "resume_sandbox",
+      {
+        title: "resume_sandbox",
+        description: "POST /v1/sandboxes/{id}/resume — Resume a paused sandbox.",
+        inputSchema: z.object({
+          id: z.string().describe("Sandbox ID to resume"),
+        }),
+      },
+      async ({ id }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${id}/resume`, {
+            method: "POST",
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error resuming sandbox: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(`Sandbox ${id} resumed successfully.`);
+        } catch (error) {
+          return errorResponse("resume sandbox", error);
+        }
+      }
+    );
+
+    // ========== Templates ==========
     server.registerTool(
       "list_templates",
       {
         title: "list_templates",
-        description: "GET /v1/templates — list available sandbox templates.",
+        description: "GET /v1/templates — List available sandbox templates. Templates are pre-configured environments (Python, Node.js, Ubuntu).",
         inputSchema: z.object({
           limit: z.number().optional().describe("Maximum number of templates to return (default: 10)"),
+          fields: z.string().optional().describe("Comma-separated fields to return (default: 'id,name,description,category,language')"),
         }),
       },
-      async ({ limit }) => {
+      async ({ limit, fields }) => {
         try {
           const params = new URLSearchParams();
           if (limit) params.set("limit", String(limit));
+          if (fields) params.set("fields", fields);
 
           const response = await hopxFetch(`/v1/templates?${params.toString()}`);
           const data = await response.json();
 
           if (!response.ok) {
-            return {
-              content: [{ type: "text", text: `Error listing templates: ${JSON.stringify(data)}` }],
-            };
+            return toolResponse(`Error listing templates: ${JSON.stringify(data)}`);
           }
 
-          return {
-            content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
-          };
+          return toolResponse(JSON.stringify(data, null, 2));
         } catch (error) {
-          return {
-            content: [{ type: "text", text: `Failed to list templates: ${error instanceof Error ? error.message : String(error)}` }],
-          };
+          return errorResponse("list templates", error);
         }
       }
     );
 
-    // ---------- Code Execution ----------
+    server.registerTool(
+      "get_template",
+      {
+        title: "get_template",
+        description: "GET /v1/templates/{name} — Get detailed template information including configuration and available regions.",
+        inputSchema: z.object({
+          name: z.string().describe("Template name"),
+        }),
+      },
+      async ({ name }) => {
+        try {
+          const response = await hopxFetch(`/v1/templates/${encodeURIComponent(name)}`);
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error getting template: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(JSON.stringify(data, null, 2));
+        } catch (error) {
+          return errorResponse("get template", error);
+        }
+      }
+    );
+
+    // ========== Code Execution ==========
     server.registerTool(
       "execute_code",
       {
         title: "execute_code",
-        description: "Execute code in a HOPX sandbox. Supports Python, JavaScript, Bash, and Go.",
+        description: "Execute code in a HOPX sandbox. Supports Python, JavaScript, Bash, and Go. Use mode='isolated' for quick one-shot scripts.",
         inputSchema: z.object({
-          sandbox_id: z.string().describe("Sandbox ID to execute code in"),
+          sandbox_id: z.string().optional().describe("Sandbox ID (required for persistent/rich/background modes, optional for isolated)"),
           code: z.string().describe("Code to execute"),
+          mode: z.enum(["isolated", "persistent", "rich", "background"]).optional().describe("Execution mode (default: isolated)"),
           language: z.enum(["python", "javascript", "bash", "go"]).optional().describe("Programming language (default: python)"),
           timeout: z.number().optional().describe("Execution timeout in seconds (default: 30)"),
           env: z.record(z.string()).optional().describe("Environment variables for execution"),
           working_dir: z.string().optional().describe("Working directory"),
+          name: z.string().optional().describe("Process name (background mode only)"),
+          template_name: z.string().optional().describe("Template to use (isolated mode only, default: code-interpreter)"),
+          region: z.string().optional().describe("Deployment region (isolated mode only)"),
         }),
       },
-      async ({ sandbox_id, code, language, timeout, env, working_dir }) => {
+      async ({ sandbox_id, code, mode, language, timeout, env, working_dir, name, template_name, region }) => {
+        const execMode = mode ?? "isolated";
+
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/execute`, {
+          if (execMode === "isolated") {
+            // Create ephemeral sandbox and execute
+            const response = await hopxFetch("/v1/execute/isolated", {
+              method: "POST",
+              body: JSON.stringify({
+                code,
+                language: language ?? "python",
+                timeout: timeout ?? 30,
+                env,
+                template: template_name ?? "code-interpreter",
+                region,
+              }),
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+              return toolResponse(`Error executing code (isolated): ${JSON.stringify(data)}`);
+            }
+
+            return toolResponse(`Execution result:\n${JSON.stringify(data, null, 2)}`);
+          } else {
+            // Execute in existing sandbox
+            if (!sandbox_id) {
+              return toolResponse("Error: sandbox_id is required for persistent/rich/background modes");
+            }
+
+            const endpoint = execMode === "background"
+              ? `/v1/sandboxes/${sandbox_id}/execute/background`
+              : `/v1/sandboxes/${sandbox_id}/execute`;
+
+            const response = await hopxFetch(endpoint, {
+              method: "POST",
+              body: JSON.stringify({
+                code,
+                language: language ?? "python",
+                timeout: timeout ?? 30,
+                env,
+                working_dir,
+                name,
+                rich: execMode === "rich",
+              }),
+            });
+
+            const data = await response.json();
+
+            if (!response.ok) {
+              return toolResponse(`Error executing code (${execMode}): ${JSON.stringify(data)}`);
+            }
+
+            return toolResponse(`Execution result:\n${JSON.stringify(data, null, 2)}`);
+          }
+        } catch (error) {
+          return errorResponse("execute code", error);
+        }
+      }
+    );
+
+    server.registerTool(
+      "execute_code_isolated",
+      {
+        title: "execute_code_isolated",
+        description: "Fast isolated code execution — Create ephemeral sandbox, execute code, return output. Best for quick one-shot scripts.",
+        inputSchema: z.object({
+          code: z.string().describe("Code to execute"),
+          language: z.enum(["python", "javascript", "bash", "go"]).optional().describe("Programming language (default: python)"),
+          timeout: z.number().optional().describe("Execution timeout in seconds (default: 30)"),
+          env: z.record(z.string()).optional().describe("Environment variables"),
+          template_name: z.string().optional().describe("Template name (default: code-interpreter)"),
+          region: z.string().optional().describe("Region (e.g., 'us-east', 'eu-west')"),
+        }),
+      },
+      async ({ code, language, timeout, env, template_name, region }) => {
+        try {
+          const response = await hopxFetch("/v1/execute/isolated", {
             method: "POST",
             body: JSON.stringify({
               code,
               language: language ?? "python",
               timeout: timeout ?? 30,
               env,
-              working_dir,
+              template: template_name ?? "code-interpreter",
+              region,
             }),
           });
 
           const data = await response.json();
 
           if (!response.ok) {
-            return {
-              content: [{ type: "text", text: `Error executing code: ${JSON.stringify(data)}` }],
-            };
+            return toolResponse(`Error executing code: ${JSON.stringify(data)}`);
           }
 
-          return {
-            content: [{ type: "text", text: `Execution result:\n${JSON.stringify(data, null, 2)}` }],
-          };
+          return toolResponse(`Execution result:\n${JSON.stringify(data, null, 2)}`);
         } catch (error) {
-          return {
-            content: [{ type: "text", text: `Failed to execute code: ${error instanceof Error ? error.message : String(error)}` }],
-          };
+          return errorResponse("execute code (isolated)", error);
         }
       }
     );
 
-    // ---------- Commands ----------
+    server.registerTool(
+      "execute_list_processes",
+      {
+        title: "execute_list_processes",
+        description: "GET /execute/processes — List background processes with their status.",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+          max_results: z.number().optional().describe("Maximum processes to return (default: 100)"),
+        }),
+      },
+      async ({ sandbox_id, max_results }) => {
+        try {
+          const params = new URLSearchParams();
+          if (max_results) params.set("max_results", String(max_results));
+
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/processes?${params.toString()}`);
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error listing processes: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(JSON.stringify(data, null, 2));
+        } catch (error) {
+          return errorResponse("list processes", error);
+        }
+      }
+    );
+
+    server.registerTool(
+      "execute_kill_process",
+      {
+        title: "execute_kill_process",
+        description: "DELETE /execute/kill — Kill a background process.",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+          process_id: z.string().describe("Process ID from execute_code_background()"),
+        }),
+      },
+      async ({ sandbox_id, process_id }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/processes/${process_id}`, {
+            method: "DELETE",
+          });
+
+          if (!response.ok) {
+            const data = await response.json();
+            return toolResponse(`Error killing process: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(`Process ${process_id} killed successfully.`);
+        } catch (error) {
+          return errorResponse("kill process", error);
+        }
+      }
+    );
+
+    // ========== Commands ==========
     server.registerTool(
       "run_command",
       {
         title: "run_command",
-        description: "Run a shell command in a sandbox.",
+        description: "POST /commands/run — Run a shell command in sandbox and wait for completion.",
         inputSchema: z.object({
           sandbox_id: z.string().describe("Sandbox ID"),
           command: z.string().describe("Shell command to execute"),
           timeout: z.number().optional().describe("Command timeout in seconds (default: 30)"),
-          working_dir: z.string().optional().describe("Working directory"),
+          working_dir: z.string().optional().describe("Working directory (default: /workspace)"),
           env: z.record(z.string()).optional().describe("Environment variables"),
         }),
       },
@@ -321,7 +515,7 @@ const mcpHandler = createMcpHandler(
             body: JSON.stringify({
               command,
               timeout: timeout ?? 30,
-              working_dir,
+              working_dir: working_dir ?? "/workspace",
               env,
             }),
           });
@@ -329,31 +523,94 @@ const mcpHandler = createMcpHandler(
           const data = await response.json();
 
           if (!response.ok) {
-            return {
-              content: [{ type: "text", text: `Error running command: ${JSON.stringify(data)}` }],
-            };
+            return toolResponse(`Error running command: ${JSON.stringify(data)}`);
           }
 
-          return {
-            content: [{ type: "text", text: `Command result:\n${JSON.stringify(data, null, 2)}` }],
-          };
+          return toolResponse(`Command result:\n${JSON.stringify(data, null, 2)}`);
         } catch (error) {
-          return {
-            content: [{ type: "text", text: `Failed to run command: ${error instanceof Error ? error.message : String(error)}` }],
-          };
+          return errorResponse("run command", error);
         }
       }
     );
 
-    // ---------- File Operations ----------
+    server.registerTool(
+      "run_command_background",
+      {
+        title: "run_command_background",
+        description: "POST /commands/background — Run shell command in background and return immediately.",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+          command: z.string().describe("Shell command to execute"),
+          timeout: z.number().optional().describe("Max execution time in seconds (default: 300)"),
+          working_dir: z.string().optional().describe("Working directory"),
+          env: z.record(z.string()).optional().describe("Environment variables"),
+          name: z.string().optional().describe("Process name for identification"),
+        }),
+      },
+      async ({ sandbox_id, command, timeout, working_dir, env, name }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/commands/background`, {
+            method: "POST",
+            body: JSON.stringify({
+              command,
+              timeout: timeout ?? 300,
+              working_dir,
+              env,
+              name,
+            }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error running background command: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(`Background command started:\n${JSON.stringify(data, null, 2)}`);
+        } catch (error) {
+          return errorResponse("run background command", error);
+        }
+      }
+    );
+
+    server.registerTool(
+      "list_processes",
+      {
+        title: "list_processes",
+        description: "GET /processes — List all system processes in the sandbox.",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+          max_results: z.number().optional().describe("Maximum processes to return (default: 200)"),
+        }),
+      },
+      async ({ sandbox_id, max_results }) => {
+        try {
+          const params = new URLSearchParams();
+          if (max_results) params.set("max_results", String(max_results));
+
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/system/processes?${params.toString()}`);
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error listing system processes: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(JSON.stringify(data, null, 2));
+        } catch (error) {
+          return errorResponse("list system processes", error);
+        }
+      }
+    );
+
+    // ========== File Operations ==========
     server.registerTool(
       "file_read",
       {
         title: "file_read",
-        description: "Read file contents from a sandbox.",
+        description: "GET /files/read — Read file contents from sandbox.",
         inputSchema: z.object({
           sandbox_id: z.string().describe("Sandbox ID"),
-          path: z.string().describe("File path to read"),
+          path: z.string().describe("File path to read (e.g., '/workspace/script.py')"),
         }),
       },
       async ({ sandbox_id, path }) => {
@@ -362,18 +619,12 @@ const mcpHandler = createMcpHandler(
           const data = await response.json();
 
           if (!response.ok) {
-            return {
-              content: [{ type: "text", text: `Error reading file: ${JSON.stringify(data)}` }],
-            };
+            return toolResponse(`Error reading file: ${JSON.stringify(data)}`);
           }
 
-          return {
-            content: [{ type: "text", text: typeof data.content === "string" ? data.content : JSON.stringify(data, null, 2) }],
-          };
+          return toolResponse(typeof data.content === "string" ? data.content : JSON.stringify(data, null, 2));
         } catch (error) {
-          return {
-            content: [{ type: "text", text: `Failed to read file: ${error instanceof Error ? error.message : String(error)}` }],
-          };
+          return errorResponse("read file", error);
         }
       }
     );
@@ -382,7 +633,7 @@ const mcpHandler = createMcpHandler(
       "file_write",
       {
         title: "file_write",
-        description: "Write file to a sandbox.",
+        description: "POST /files/write — Write file to sandbox (creates or overwrites).",
         inputSchema: z.object({
           sandbox_id: z.string().describe("Sandbox ID"),
           path: z.string().describe("Destination file path"),
@@ -399,18 +650,12 @@ const mcpHandler = createMcpHandler(
           const data = await response.json();
 
           if (!response.ok) {
-            return {
-              content: [{ type: "text", text: `Error writing file: ${JSON.stringify(data)}` }],
-            };
+            return toolResponse(`Error writing file: ${JSON.stringify(data)}`);
           }
 
-          return {
-            content: [{ type: "text", text: `File written successfully: ${path}` }],
-          };
+          return toolResponse(`File written successfully: ${path}`);
         } catch (error) {
-          return {
-            content: [{ type: "text", text: `Failed to write file: ${error instanceof Error ? error.message : String(error)}` }],
-          };
+          return errorResponse("write file", error);
         }
       }
     );
@@ -419,40 +664,65 @@ const mcpHandler = createMcpHandler(
       "file_list",
       {
         title: "file_list",
-        description: "List directory contents in a sandbox.",
+        description: "GET /files/list — List directory contents in sandbox.",
         inputSchema: z.object({
           sandbox_id: z.string().describe("Sandbox ID"),
           path: z.string().optional().describe("Directory path to list (default: /workspace)"),
+          max_results: z.number().optional().describe("Maximum files to return (default: 1000)"),
         }),
       },
-      async ({ sandbox_id, path }) => {
+      async ({ sandbox_id, path, max_results }) => {
         try {
           const dirPath = path ?? "/workspace";
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/files/list?path=${encodeURIComponent(dirPath)}`);
+          const params = new URLSearchParams();
+          params.set("path", dirPath);
+          if (max_results) params.set("max_results", String(max_results));
+
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/files/list?${params.toString()}`);
           const data = await response.json();
 
           if (!response.ok) {
-            return {
-              content: [{ type: "text", text: `Error listing files: ${JSON.stringify(data)}` }],
-            };
+            return toolResponse(`Error listing files: ${JSON.stringify(data)}`);
           }
 
-          return {
-            content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
-          };
+          return toolResponse(JSON.stringify(data, null, 2));
         } catch (error) {
-          return {
-            content: [{ type: "text", text: `Failed to list files: ${error instanceof Error ? error.message : String(error)}` }],
-          };
+          return errorResponse("list files", error);
         }
       }
     );
 
     server.registerTool(
-      "file_delete",
+      "file_exists",
       {
-        title: "file_delete",
-        description: "Delete file or directory from a sandbox.",
+        title: "file_exists",
+        description: "GET /files/exists — Check if file or directory exists.",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+          path: z.string().describe("Path to check"),
+        }),
+      },
+      async ({ sandbox_id, path }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/files/exists?path=${encodeURIComponent(path)}`);
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error checking file existence: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(JSON.stringify(data, null, 2));
+        } catch (error) {
+          return errorResponse("check file existence", error);
+        }
+      }
+    );
+
+    server.registerTool(
+      "file_remove",
+      {
+        title: "file_remove",
+        description: "DELETE /files/remove — Delete file or directory from sandbox.",
         inputSchema: z.object({
           sandbox_id: z.string().describe("Sandbox ID"),
           path: z.string().describe("Path to delete"),
@@ -467,28 +737,154 @@ const mcpHandler = createMcpHandler(
 
           if (!response.ok) {
             const data = await response.json();
-            return {
-              content: [{ type: "text", text: `Error deleting file: ${JSON.stringify(data)}` }],
-            };
+            return toolResponse(`Error removing file: ${JSON.stringify(data)}`);
           }
 
-          return {
-            content: [{ type: "text", text: `File deleted successfully: ${path}` }],
-          };
+          return toolResponse(`File removed successfully: ${path}`);
         } catch (error) {
-          return {
-            content: [{ type: "text", text: `Failed to delete file: ${error instanceof Error ? error.message : String(error)}` }],
-          };
+          return errorResponse("remove file", error);
         }
       }
     );
 
-    // ---------- System Metrics ----------
+    server.registerTool(
+      "file_mkdir",
+      {
+        title: "file_mkdir",
+        description: "POST /files/mkdir — Create directory in sandbox (creates parent directories if needed).",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+          path: z.string().describe("Directory path to create"),
+        }),
+      },
+      async ({ sandbox_id, path }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/files/mkdir`, {
+            method: "POST",
+            body: JSON.stringify({ path }),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error creating directory: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(`Directory created successfully: ${path}`);
+        } catch (error) {
+          return errorResponse("create directory", error);
+        }
+      }
+    );
+
+    // ========== VM Agent Interactions ==========
+    server.registerTool(
+      "ping_vm",
+      {
+        title: "ping_vm",
+        description: "Quick VM liveness check. Returns immediately to verify VM is responsive.",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+        }),
+      },
+      async ({ sandbox_id }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/ping`);
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error pinging VM: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(`VM is alive: ${JSON.stringify(data, null, 2)}`);
+        } catch (error) {
+          return errorResponse("ping VM", error);
+        }
+      }
+    );
+
+    server.registerTool(
+      "get_vm_info",
+      {
+        title: "get_vm_info",
+        description: "GET /info — Get VM agent information and capabilities.",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+        }),
+      },
+      async ({ sandbox_id }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/info`);
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error getting VM info: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(JSON.stringify(data, null, 2));
+        } catch (error) {
+          return errorResponse("get VM info", error);
+        }
+      }
+    );
+
+    server.registerTool(
+      "get_preview_url",
+      {
+        title: "get_preview_url",
+        description: "Get public preview URL for a service running in the sandbox on a specific port.",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+          port: z.number().describe("Port number where service is listening"),
+        }),
+      },
+      async ({ sandbox_id, port }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/preview?port=${port}`);
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error getting preview URL: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(`Preview URL: ${JSON.stringify(data, null, 2)}\n\nNote: Service must bind to 0.0.0.0 (not localhost) to be accessible.`);
+        } catch (error) {
+          return errorResponse("get preview URL", error);
+        }
+      }
+    );
+
+    server.registerTool(
+      "get_agent_url",
+      {
+        title: "get_agent_url",
+        description: "Get the agent URL for the sandbox (default port 7777).",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+        }),
+      },
+      async ({ sandbox_id }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/agent-url`);
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error getting agent URL: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(JSON.stringify(data, null, 2));
+        } catch (error) {
+          return errorResponse("get agent URL", error);
+        }
+      }
+    );
+
+    // ========== System Metrics ==========
     server.registerTool(
       "get_system_metrics",
       {
         title: "get_system_metrics",
-        description: "Get sandbox system metrics (CPU, memory, disk usage).",
+        description: "GET /system — Get sandbox system metrics (CPU, memory, disk usage).",
         inputSchema: z.object({
           sandbox_id: z.string().describe("Sandbox ID"),
         }),
@@ -499,18 +895,150 @@ const mcpHandler = createMcpHandler(
           const data = await response.json();
 
           if (!response.ok) {
-            return {
-              content: [{ type: "text", text: `Error getting metrics: ${JSON.stringify(data)}` }],
-            };
+            return toolResponse(`Error getting system metrics: ${JSON.stringify(data)}`);
           }
 
-          return {
-            content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
-          };
+          return toolResponse(JSON.stringify(data, null, 2));
         } catch (error) {
-          return {
-            content: [{ type: "text", text: `Failed to get metrics: ${error instanceof Error ? error.message : String(error)}` }],
-          };
+          return errorResponse("get system metrics", error);
+        }
+      }
+    );
+
+    // ========== Environment Variables ==========
+    server.registerTool(
+      "env_get",
+      {
+        title: "env_get",
+        description: "GET /env — Get all global environment variables (sensitive values masked).",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+        }),
+      },
+      async ({ sandbox_id }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/env`);
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error getting environment variables: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(JSON.stringify(data, null, 2));
+        } catch (error) {
+          return errorResponse("get environment variables", error);
+        }
+      }
+    );
+
+    server.registerTool(
+      "env_set",
+      {
+        title: "env_set",
+        description: "PUT/PATCH /env — Set or merge environment variables.",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+          env_vars: z.record(z.string()).describe("Dictionary of environment variables to set"),
+          merge: z.boolean().optional().describe("If true, merge with existing vars (default: true)"),
+        }),
+      },
+      async ({ sandbox_id, env_vars, merge }) => {
+        try {
+          const method = merge !== false ? "PATCH" : "PUT";
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/env`, {
+            method,
+            body: JSON.stringify(env_vars),
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error setting environment variables: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(`Environment variables ${merge !== false ? "merged" : "set"} successfully.`);
+        } catch (error) {
+          return errorResponse("set environment variables", error);
+        }
+      }
+    );
+
+    server.registerTool(
+      "env_clear",
+      {
+        title: "env_clear",
+        description: "DELETE /env — Clear all global environment variables.",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+        }),
+      },
+      async ({ sandbox_id }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/env`, {
+            method: "DELETE",
+          });
+
+          if (!response.ok) {
+            const data = await response.json();
+            return toolResponse(`Error clearing environment variables: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse("Environment variables cleared successfully.");
+        } catch (error) {
+          return errorResponse("clear environment variables", error);
+        }
+      }
+    );
+
+    // ========== Cache ==========
+    server.registerTool(
+      "cache_clear",
+      {
+        title: "cache_clear",
+        description: "POST /cache/clear — Clear execution cache to free memory or force re-execution.",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+        }),
+      },
+      async ({ sandbox_id }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/cache/clear`, {
+            method: "POST",
+          });
+
+          if (!response.ok) {
+            const data = await response.json();
+            return toolResponse(`Error clearing cache: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse("Cache cleared successfully.");
+        } catch (error) {
+          return errorResponse("clear cache", error);
+        }
+      }
+    );
+
+    server.registerTool(
+      "cache_stats",
+      {
+        title: "cache_stats",
+        description: "GET /cache/stats — Get execution cache statistics.",
+        inputSchema: z.object({
+          sandbox_id: z.string().describe("Sandbox ID"),
+        }),
+      },
+      async ({ sandbox_id }) => {
+        try {
+          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/cache/stats`);
+          const data = await response.json();
+
+          if (!response.ok) {
+            return toolResponse(`Error getting cache stats: ${JSON.stringify(data)}`);
+          }
+
+          return toolResponse(JSON.stringify(data, null, 2));
+        } catch (error) {
+          return errorResponse("get cache stats", error);
         }
       }
     );

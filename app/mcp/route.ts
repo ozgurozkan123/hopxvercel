@@ -274,7 +274,7 @@ result = sandbox.run_code_background(code='''${code}''', language="${lang}", tim
           name: z.string().optional().describe("Process name for identification"),
         }),
       },
-      async ({ sandbox_id, command, timeout, working_dir, env, name }) => ({
+      async ({ sandbox_id, command, timeout, working_dir, env }) => ({
         content: [{ type: "text", text: `To run background command, use HOPX SDK:\nsandbox = Sandbox.connect(sandbox_id="${sandbox_id}")\nresult = sandbox.commands.run(command="${command}", timeout=${timeout || 300}, working_dir="${working_dir || '/workspace'}", env=${JSON.stringify(env || {})}, background=True)` }],
       })
     );
@@ -534,44 +534,7 @@ result = sandbox.run_code_background(code='''${code}''', language="${lang}", tim
       })
     );
   },
-  {
-    capabilities: {
-      tools: {
-        health: { description: "GET /health — public health check" },
-        list_sandboxes: { description: "GET /v1/sandboxes — list all sandboxes" },
-        create_sandbox: { description: "POST /v1/sandboxes — create a new sandbox" },
-        get_sandbox: { description: "GET /v1/sandboxes/{id} — get sandbox info" },
-        delete_sandbox: { description: "DELETE /v1/sandboxes/{id} — delete sandbox" },
-        update_sandbox_timeout: { description: "PUT /v1/sandboxes/{id}/timeout — update timeout" },
-        resume_sandbox: { description: "POST /v1/sandboxes/{id}/resume — resume paused sandbox" },
-        list_templates: { description: "GET /v1/templates — list sandbox templates" },
-        get_template: { description: "GET /v1/templates/{name} — get template info" },
-        execute_code: { description: "Unified code execution with modes: isolated, persistent, rich, background" },
-        execute_code_isolated: { description: "Fast isolated code execution (deprecated)" },
-        execute_list_processes: { description: "List background processes" },
-        execute_kill_process: { description: "Kill a background process" },
-        run_command: { description: "Run shell command in sandbox" },
-        run_command_background: { description: "Run shell command in background" },
-        list_processes: { description: "List all system processes" },
-        file_read: { description: "Read file contents from sandbox" },
-        file_write: { description: "Write file to sandbox" },
-        file_list: { description: "List directory contents" },
-        file_exists: { description: "Check if file/directory exists" },
-        file_remove: { description: "Delete file or directory" },
-        file_mkdir: { description: "Create directory" },
-        ping_vm: { description: "Quick VM liveness check" },
-        get_vm_info: { description: "Get VM agent information" },
-        get_preview_url: { description: "Get public preview URL for a service" },
-        get_agent_url: { description: "Get agent URL for the sandbox" },
-        get_system_metrics: { description: "Get CPU, memory, disk usage" },
-        env_get: { description: "Get all environment variables" },
-        env_set: { description: "Set environment variables" },
-        env_clear: { description: "Clear all environment variables" },
-        cache_clear: { description: "Clear execution cache" },
-        cache_stats: { description: "Get cache statistics" },
-      },
-    },
-  },
+  {},
   {
     basePath: "",
     verboseLogs: true,

@@ -1072,7 +1072,6 @@ async function handleRequest(request: Request): Promise<Response> {
 
   // Run the MCP handler within the API key context
   return apiKeyStorage.run(apiKey, async () => {
-    // @ts-expect-error - mcpHandler expects specific Request type
     return mcpHandler(request);
   });
 }

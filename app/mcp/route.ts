@@ -131,25 +131,40 @@ async function getSandboxInfo(sandboxId: string): Promise<{ directUrl: string; a
     return { directUrl: cached.directUrl, authToken: cached.authToken };
   }
 
-  // Fetch sandbox details from control plane
-  console.log(`[HOPX] Fetching sandbox info for ${sandboxId}`);
-  const response = await hopxFetch(`/v1/sandboxes/${sandboxId}`);
+  // First, get sandbox details to get the direct_url (public_host)
+  console.log(`[HOPX] Fetching sandbox details for ${sandboxId}`);
+  const detailsResponse = await hopxFetch(`/v1/sandboxes/${sandboxId}`);
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Failed to get sandbox details: ${response.status} ${errorText}`);
+  if (!detailsResponse.ok) {
+    const errorText = await detailsResponse.text();
+    throw new Error(`Failed to get sandbox details: ${detailsResponse.status} ${errorText}`);
   }
 
-  const sandbox = await response.json();
-  const directUrl = sandbox.direct_url;
-  const authToken = sandbox.auth_token;
+  const sandbox = await detailsResponse.json();
+  // The API returns public_host or direct_url depending on the response
+  const directUrl = sandbox.direct_url || sandbox.public_host;
 
   if (!directUrl) {
-    throw new Error(`Sandbox ${sandboxId} does not have a direct_url - it may not be running`);
+    throw new Error(`Sandbox ${sandboxId} does not have a direct_url/public_host - it may not be running`);
   }
 
+  // GET /v1/sandboxes/:id does NOT return auth_token
+  // We need to call POST /v1/sandboxes/:id/token/refresh to get a fresh JWT
+  console.log(`[HOPX] Refreshing auth token for sandbox ${sandboxId}`);
+  const tokenResponse = await hopxFetch(`/v1/sandboxes/${sandboxId}/token/refresh`, {
+    method: "POST",
+  });
+
+  if (!tokenResponse.ok) {
+    const errorText = await tokenResponse.text();
+    throw new Error(`Failed to refresh auth token: ${tokenResponse.status} ${errorText}`);
+  }
+
+  const tokenData = await tokenResponse.json();
+  const authToken = tokenData.auth_token || tokenData.token;
+
   if (!authToken) {
-    throw new Error(`Sandbox ${sandboxId} does not have an auth_token - cannot authenticate to VM Agent`);
+    throw new Error(`Token refresh did not return auth_token for sandbox ${sandboxId}`);
   }
 
   // Cache the result

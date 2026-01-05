@@ -17,6 +17,15 @@ function getApiKey(): string | null {
 // HOPX API base URLs
 const HOPX_CONTROL_PLANE = "https://api.hopx.dev";
 
+// Request counter for tracing
+let requestCounter = 0;
+
+// Helper to truncate long strings for logging
+function truncateForLog(str: string, maxLen = 500): string {
+  if (str.length <= maxLen) return str;
+  return str.substring(0, maxLen) + `... [truncated, total ${str.length} chars]`;
+}
+
 // Helper to make authenticated HOPX Control Plane API calls
 // Used for: sandbox lifecycle, templates
 async function hopxFetch(
@@ -24,21 +33,73 @@ async function hopxFetch(
   options: RequestInit = {}
 ): Promise<Response> {
   const apiKey = getApiKey();
+  const requestId = ++requestCounter;
+  const fullUrl = `${HOPX_CONTROL_PLANE}${endpoint}`;
+  const method = options.method ?? "GET";
+
+  console.log(`[HOPX:${requestId}] ▶ REQUEST to Control Plane`, {
+    url: fullUrl,
+    method,
+    hasApiKey: Boolean(apiKey),
+    apiKeyPrefix: apiKey ? `${apiKey.substring(0, 8)}...` : null,
+    body: options.body ? truncateForLog(String(options.body)) : undefined,
+  });
 
   if (!apiKey) {
-    throw new Error("No HOPX API key provided. Please configure your HOPX API key in the MCP server settings.");
+    const error = new Error("No HOPX API key provided. Please configure your HOPX API key in the MCP server settings.");
+    console.error(`[HOPX:${requestId}] ✗ AUTH ERROR`, { error: error.message });
+    throw error;
   }
 
   const headers = new Headers(options.headers);
   headers.set("X-API-Key", apiKey);
   headers.set("Content-Type", "application/json");
 
-  const response = await fetch(`${HOPX_CONTROL_PLANE}${endpoint}`, {
-    ...options,
-    headers,
-  });
+  const startTime = Date.now();
 
-  return response;
+  try {
+    const response = await fetch(fullUrl, {
+      ...options,
+      headers,
+    });
+
+    const duration = Date.now() - startTime;
+
+    // Clone response to read body without consuming it
+    const responseClone = response.clone();
+    let responseBody: string;
+    try {
+      responseBody = await responseClone.text();
+    } catch {
+      responseBody = "[Could not read response body]";
+    }
+
+    if (response.ok) {
+      console.log(`[HOPX:${requestId}] ✓ RESPONSE OK`, {
+        status: response.status,
+        statusText: response.statusText,
+        duration: `${duration}ms`,
+        body: truncateForLog(responseBody),
+      });
+    } else {
+      console.error(`[HOPX:${requestId}] ✗ RESPONSE ERROR`, {
+        status: response.status,
+        statusText: response.statusText,
+        duration: `${duration}ms`,
+        body: truncateForLog(responseBody),
+      });
+    }
+
+    return response;
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`[HOPX:${requestId}] ✗ FETCH ERROR`, {
+      duration: `${duration}ms`,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    throw error;
+  }
 }
 
 // Helper to make authenticated HOPX VM Agent API calls
@@ -49,22 +110,77 @@ async function hopxAgentFetch(
   options: RequestInit = {}
 ): Promise<Response> {
   const apiKey = getApiKey();
+  const requestId = ++requestCounter;
+  const fullUrl = `https://${sandboxId}.hopx.dev${endpoint}`;
+  const method = options.method ?? "GET";
+
+  console.log(`[HOPX:${requestId}] ▶ REQUEST to VM Agent`, {
+    sandboxId,
+    url: fullUrl,
+    method,
+    hasApiKey: Boolean(apiKey),
+    apiKeyPrefix: apiKey ? `${apiKey.substring(0, 8)}...` : null,
+    body: options.body ? truncateForLog(String(options.body)) : undefined,
+  });
 
   if (!apiKey) {
-    throw new Error("No HOPX API key provided. Please configure your HOPX API key in the MCP server settings.");
+    const error = new Error("No HOPX API key provided. Please configure your HOPX API key in the MCP server settings.");
+    console.error(`[HOPX:${requestId}] ✗ AUTH ERROR`, { error: error.message });
+    throw error;
   }
 
   const headers = new Headers(options.headers);
   headers.set("Authorization", `Bearer ${apiKey}`);
   headers.set("Content-Type", "application/json");
 
-  // VM Agent API runs at https://{sandbox_id}.hopx.dev
-  const response = await fetch(`https://${sandboxId}.hopx.dev${endpoint}`, {
-    ...options,
-    headers,
-  });
+  const startTime = Date.now();
 
-  return response;
+  try {
+    const response = await fetch(fullUrl, {
+      ...options,
+      headers,
+    });
+
+    const duration = Date.now() - startTime;
+
+    // Clone response to read body without consuming it
+    const responseClone = response.clone();
+    let responseBody: string;
+    try {
+      responseBody = await responseClone.text();
+    } catch {
+      responseBody = "[Could not read response body]";
+    }
+
+    if (response.ok) {
+      console.log(`[HOPX:${requestId}] ✓ RESPONSE OK`, {
+        sandboxId,
+        status: response.status,
+        statusText: response.statusText,
+        duration: `${duration}ms`,
+        body: truncateForLog(responseBody),
+      });
+    } else {
+      console.error(`[HOPX:${requestId}] ✗ RESPONSE ERROR`, {
+        sandboxId,
+        status: response.status,
+        statusText: response.statusText,
+        duration: `${duration}ms`,
+        body: truncateForLog(responseBody),
+      });
+    }
+
+    return response;
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    console.error(`[HOPX:${requestId}] ✗ FETCH ERROR`, {
+      sandboxId,
+      duration: `${duration}ms`,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    throw error;
+  }
 }
 
 // Helper for standard tool response

@@ -102,21 +102,37 @@ async function hopxFetch(
   }
 }
 
-// Cache for sandbox direct_url lookups (to avoid fetching on every call)
-const sandboxUrlCache = new Map<string, { url: string; expiresAt: number }>();
+// Cache for sandbox info (direct_url and auth_token)
+// The auth_token (JWT) is required for VM Agent API calls
+interface SandboxCache {
+  directUrl: string;
+  authToken: string;
+  expiresAt: number;
+}
+const sandboxCache = new Map<string, SandboxCache>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
-// Helper to get sandbox direct_url from control plane
-async function getSandboxDirectUrl(sandboxId: string): Promise<string> {
+// Helper to store sandbox info (called after create_sandbox or get_sandbox)
+function cacheSandboxInfo(sandboxId: string, directUrl: string, authToken: string) {
+  sandboxCache.set(sandboxId, {
+    directUrl,
+    authToken,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
+  console.log(`[HOPX] Cached sandbox info for ${sandboxId}: directUrl=${directUrl}, authToken=${authToken.substring(0, 20)}...`);
+}
+
+// Helper to get sandbox info (direct_url and auth_token) from control plane
+async function getSandboxInfo(sandboxId: string): Promise<{ directUrl: string; authToken: string }> {
   // Check cache first
-  const cached = sandboxUrlCache.get(sandboxId);
+  const cached = sandboxCache.get(sandboxId);
   if (cached && cached.expiresAt > Date.now()) {
-    console.log(`[HOPX] Using cached direct_url for sandbox ${sandboxId}`);
-    return cached.url;
+    console.log(`[HOPX] Using cached sandbox info for ${sandboxId}`);
+    return { directUrl: cached.directUrl, authToken: cached.authToken };
   }
 
   // Fetch sandbox details from control plane
-  console.log(`[HOPX] Fetching direct_url for sandbox ${sandboxId}`);
+  console.log(`[HOPX] Fetching sandbox info for ${sandboxId}`);
   const response = await hopxFetch(`/v1/sandboxes/${sandboxId}`);
 
   if (!response.ok) {
@@ -126,40 +142,36 @@ async function getSandboxDirectUrl(sandboxId: string): Promise<string> {
 
   const sandbox = await response.json();
   const directUrl = sandbox.direct_url;
+  const authToken = sandbox.auth_token;
 
   if (!directUrl) {
     throw new Error(`Sandbox ${sandboxId} does not have a direct_url - it may not be running`);
   }
 
-  // Cache the result
-  sandboxUrlCache.set(sandboxId, {
-    url: directUrl,
-    expiresAt: Date.now() + CACHE_TTL_MS,
-  });
+  if (!authToken) {
+    throw new Error(`Sandbox ${sandboxId} does not have an auth_token - cannot authenticate to VM Agent`);
+  }
 
-  console.log(`[HOPX] Got direct_url for sandbox ${sandboxId}: ${directUrl}`);
-  return directUrl;
+  // Cache the result
+  cacheSandboxInfo(sandboxId, directUrl, authToken);
+
+  console.log(`[HOPX] Got sandbox info for ${sandboxId}: directUrl=${directUrl}`);
+  return { directUrl, authToken };
 }
 
 // Helper to make authenticated HOPX VM Agent API calls
 // Used for: file operations, code execution, commands (sandbox-specific)
+// IMPORTANT: VM Agent uses JWT token (auth_token), NOT the API key
 async function hopxAgentFetch(
   sandboxId: string,
   endpoint: string,
   options: RequestInit = {}
 ): Promise<Response> {
-  const apiKey = getApiKey();
   const requestId = ++requestCounter;
   const method = options.method ?? "GET";
 
-  if (!apiKey) {
-    const error = new Error("No HOPX API key provided. Please configure your HOPX API key in the MCP server settings.");
-    console.error(`[HOPX:${requestId}] ✗ AUTH ERROR`, { error: error.message });
-    throw error;
-  }
-
-  // Get the actual VM Agent URL from sandbox details
-  const directUrl = await getSandboxDirectUrl(sandboxId);
+  // Get sandbox info (direct_url and JWT auth_token)
+  const { directUrl, authToken } = await getSandboxInfo(sandboxId);
 
   // The direct_url includes port 7777, e.g., https://7777-{id}.{node}.vms.hopx.dev
   // We need to append our endpoint to it
@@ -171,13 +183,14 @@ async function hopxAgentFetch(
     endpoint,
     fullUrl,
     method,
-    hasApiKey: Boolean(apiKey),
-    apiKeyPrefix: apiKey ? `${apiKey.substring(0, 8)}...` : null,
+    hasAuthToken: Boolean(authToken),
+    authTokenPrefix: authToken ? `${authToken.substring(0, 20)}...` : null,
     body: options.body ? truncateForLog(String(options.body)) : undefined,
   });
 
   const headers = new Headers(options.headers);
-  headers.set("Authorization", `Bearer ${apiKey}`);
+  // Use JWT token for VM Agent (NOT the API key)
+  headers.set("Authorization", `Bearer ${authToken}`);
   headers.set("Content-Type", "application/json");
 
   const startTime = Date.now();
@@ -367,6 +380,11 @@ const mcpHandler = createMcpHandler(
             return toolResponse(`Error creating sandbox: ${JSON.stringify(data)}`);
           }
 
+          // Cache the sandbox info (direct_url and auth_token) for VM Agent calls
+          if (data.id && data.direct_url && data.auth_token) {
+            cacheSandboxInfo(data.id, data.direct_url, data.auth_token);
+          }
+
           return toolResponse(`Sandbox created successfully:\n${JSON.stringify(data, null, 2)}`);
         } catch (error) {
           return errorResponse("create sandbox", error);
@@ -390,6 +408,11 @@ const mcpHandler = createMcpHandler(
 
           if (!response.ok) {
             return toolResponse(`Error getting sandbox: ${JSON.stringify(data)}`);
+          }
+
+          // Cache the sandbox info (direct_url and auth_token) for VM Agent calls
+          if (data.id && data.direct_url && data.auth_token) {
+            cacheSandboxInfo(data.id, data.direct_url, data.auth_token);
           }
 
           return toolResponse(JSON.stringify(data, null, 2));

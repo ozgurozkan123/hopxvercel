@@ -102,6 +102,45 @@ async function hopxFetch(
   }
 }
 
+// Cache for sandbox direct_url lookups (to avoid fetching on every call)
+const sandboxUrlCache = new Map<string, { url: string; expiresAt: number }>();
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Helper to get sandbox direct_url from control plane
+async function getSandboxDirectUrl(sandboxId: string): Promise<string> {
+  // Check cache first
+  const cached = sandboxUrlCache.get(sandboxId);
+  if (cached && cached.expiresAt > Date.now()) {
+    console.log(`[HOPX] Using cached direct_url for sandbox ${sandboxId}`);
+    return cached.url;
+  }
+
+  // Fetch sandbox details from control plane
+  console.log(`[HOPX] Fetching direct_url for sandbox ${sandboxId}`);
+  const response = await hopxFetch(`/v1/sandboxes/${sandboxId}`);
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Failed to get sandbox details: ${response.status} ${errorText}`);
+  }
+
+  const sandbox = await response.json();
+  const directUrl = sandbox.direct_url;
+
+  if (!directUrl) {
+    throw new Error(`Sandbox ${sandboxId} does not have a direct_url - it may not be running`);
+  }
+
+  // Cache the result
+  sandboxUrlCache.set(sandboxId, {
+    url: directUrl,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
+
+  console.log(`[HOPX] Got direct_url for sandbox ${sandboxId}: ${directUrl}`);
+  return directUrl;
+}
+
 // Helper to make authenticated HOPX VM Agent API calls
 // Used for: file operations, code execution, commands (sandbox-specific)
 async function hopxAgentFetch(
@@ -111,23 +150,31 @@ async function hopxAgentFetch(
 ): Promise<Response> {
   const apiKey = getApiKey();
   const requestId = ++requestCounter;
-  const fullUrl = `https://${sandboxId}.hopx.dev${endpoint}`;
   const method = options.method ?? "GET";
-
-  console.log(`[HOPX:${requestId}] ▶ REQUEST to VM Agent`, {
-    sandboxId,
-    url: fullUrl,
-    method,
-    hasApiKey: Boolean(apiKey),
-    apiKeyPrefix: apiKey ? `${apiKey.substring(0, 8)}...` : null,
-    body: options.body ? truncateForLog(String(options.body)) : undefined,
-  });
 
   if (!apiKey) {
     const error = new Error("No HOPX API key provided. Please configure your HOPX API key in the MCP server settings.");
     console.error(`[HOPX:${requestId}] ✗ AUTH ERROR`, { error: error.message });
     throw error;
   }
+
+  // Get the actual VM Agent URL from sandbox details
+  const directUrl = await getSandboxDirectUrl(sandboxId);
+
+  // The direct_url includes port 7777, e.g., https://7777-{id}.{node}.vms.hopx.dev
+  // We need to append our endpoint to it
+  const fullUrl = `${directUrl}${endpoint}`;
+
+  console.log(`[HOPX:${requestId}] ▶ REQUEST to VM Agent`, {
+    sandboxId,
+    directUrl,
+    endpoint,
+    fullUrl,
+    method,
+    hasApiKey: Boolean(apiKey),
+    apiKeyPrefix: apiKey ? `${apiKey.substring(0, 8)}...` : null,
+    body: options.body ? truncateForLog(String(options.body)) : undefined,
+  });
 
   const headers = new Headers(options.headers);
   headers.set("Authorization", `Bearer ${apiKey}`);

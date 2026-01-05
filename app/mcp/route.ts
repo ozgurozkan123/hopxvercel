@@ -29,7 +29,7 @@ async function hopxFetch(
   }
 
   const headers = new Headers(options.headers);
-  headers.set("Authorization", `Bearer ${apiKey}`);
+  headers.set("X-API-Key", apiKey);
   headers.set("Content-Type", "application/json");
 
   const response = await fetch(`${HOPX_API_BASE}${endpoint}`, {
@@ -128,7 +128,7 @@ const mcpHandler = createMcpHandler(
           const response = await hopxFetch("/v1/sandboxes", {
             method: "POST",
             body: JSON.stringify({
-              template: template_id,
+              template_id,
               region,
               timeout_seconds: timeout_seconds ?? 600,
               internet_access: internet_access ?? true,

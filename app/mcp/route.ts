@@ -183,6 +183,9 @@ async function hopxAgentFetch(
   }
 }
 
+// Tool invocation counter
+let toolCounter = 0;
+
 // Helper for standard tool response
 function toolResponse(text: string) {
   return { content: [{ type: "text" as const, text }] };
@@ -190,7 +193,30 @@ function toolResponse(text: string) {
 
 // Helper for error responses
 function errorResponse(action: string, error: unknown) {
+  console.error(`[HOPX TOOL] ✗ Error during ${action}:`, error instanceof Error ? error.message : String(error));
   return toolResponse(`Failed to ${action}: ${error instanceof Error ? error.message : String(error)}`);
+}
+
+// Helper to log tool invocation
+function logToolCall(toolName: string, args: Record<string, unknown>) {
+  const invocationId = ++toolCounter;
+  console.log(`[HOPX TOOL:${invocationId}] ▶ INVOKING "${toolName}"`, {
+    args: JSON.stringify(args).substring(0, 500),
+  });
+  return invocationId;
+}
+
+// Helper to log tool completion
+function logToolComplete(invocationId: number, toolName: string, success: boolean, resultPreview?: string) {
+  if (success) {
+    console.log(`[HOPX TOOL:${invocationId}] ✓ COMPLETED "${toolName}"`, {
+      resultPreview: resultPreview?.substring(0, 200),
+    });
+  } else {
+    console.error(`[HOPX TOOL:${invocationId}] ✗ FAILED "${toolName}"`, {
+      resultPreview: resultPreview?.substring(0, 200),
+    });
+  }
 }
 
 // Create the MCP handler with tools
@@ -205,16 +231,21 @@ const mcpHandler = createMcpHandler(
         inputSchema: z.object({}),
       },
       async () => {
+        const invocationId = logToolCall("health", {});
         const apiKey = getApiKey();
         if (!apiKey) {
+          logToolComplete(invocationId, "health", false, "No API key");
           return toolResponse("Error: No HOPX API key provided. Please configure your API key in the MCP server settings.");
         }
 
         try {
           const response = await hopxFetch("/health");
           const data = await response.json();
-          return toolResponse(`HOPX API Status: ${JSON.stringify(data, null, 2)}\nAuthenticated: Yes (API key: ${apiKey.substring(0, 8)}...)`);
+          const result = `HOPX API Status: ${JSON.stringify(data, null, 2)}\nAuthenticated: Yes (API key: ${apiKey.substring(0, 8)}...)`;
+          logToolComplete(invocationId, "health", response.ok, JSON.stringify(data));
+          return toolResponse(result);
         } catch (error) {
+          logToolComplete(invocationId, "health", false, String(error));
           return errorResponse("check HOPX API health", error);
         }
       }
@@ -233,6 +264,7 @@ const mcpHandler = createMcpHandler(
         }),
       },
       async ({ limit, status, region }) => {
+        const invocationId = logToolCall("list_sandboxes", { limit, status, region });
         try {
           const params = new URLSearchParams();
           if (limit) params.set("limit", String(limit));
@@ -243,11 +275,14 @@ const mcpHandler = createMcpHandler(
           const data = await response.json();
 
           if (!response.ok) {
+            logToolComplete(invocationId, "list_sandboxes", false, JSON.stringify(data));
             return toolResponse(`Error listing sandboxes: ${JSON.stringify(data)}`);
           }
 
+          logToolComplete(invocationId, "list_sandboxes", true, JSON.stringify(data));
           return toolResponse(JSON.stringify(data, null, 2));
         } catch (error) {
+          logToolComplete(invocationId, "list_sandboxes", false, String(error));
           return errorResponse("list sandboxes", error);
         }
       }
@@ -554,6 +589,7 @@ const mcpHandler = createMcpHandler(
         }),
       },
       async ({ code, language, timeout, env, template_name, region }) => {
+        const invocationId = logToolCall("execute_code_isolated", { language, timeout, template_name, region, codeLength: code.length });
         try {
           const response = await hopxFetch("/v1/execute/isolated", {
             method: "POST",
@@ -570,11 +606,14 @@ const mcpHandler = createMcpHandler(
           const data = await response.json();
 
           if (!response.ok) {
+            logToolComplete(invocationId, "execute_code_isolated", false, JSON.stringify(data));
             return toolResponse(`Error executing code: ${JSON.stringify(data)}`);
           }
 
+          logToolComplete(invocationId, "execute_code_isolated", true, JSON.stringify(data));
           return toolResponse(`Execution result:\n${JSON.stringify(data, null, 2)}`);
         } catch (error) {
+          logToolComplete(invocationId, "execute_code_isolated", false, String(error));
           return errorResponse("execute code (isolated)", error);
         }
       }

@@ -14,10 +14,11 @@ function getApiKey(): string | null {
   return apiKeyStorage.getStore() ?? null;
 }
 
-// HOPX API base URL
-const HOPX_API_BASE = "https://api.hopx.dev";
+// HOPX API base URLs
+const HOPX_CONTROL_PLANE = "https://api.hopx.dev";
 
-// Helper to make authenticated HOPX API calls
+// Helper to make authenticated HOPX Control Plane API calls
+// Used for: sandbox lifecycle, templates
 async function hopxFetch(
   endpoint: string,
   options: RequestInit = {}
@@ -32,7 +33,33 @@ async function hopxFetch(
   headers.set("X-API-Key", apiKey);
   headers.set("Content-Type", "application/json");
 
-  const response = await fetch(`${HOPX_API_BASE}${endpoint}`, {
+  const response = await fetch(`${HOPX_CONTROL_PLANE}${endpoint}`, {
+    ...options,
+    headers,
+  });
+
+  return response;
+}
+
+// Helper to make authenticated HOPX VM Agent API calls
+// Used for: file operations, code execution, commands (sandbox-specific)
+async function hopxAgentFetch(
+  sandboxId: string,
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const apiKey = getApiKey();
+
+  if (!apiKey) {
+    throw new Error("No HOPX API key provided. Please configure your HOPX API key in the MCP server settings.");
+  }
+
+  const headers = new Headers(options.headers);
+  headers.set("Authorization", `Bearer ${apiKey}`);
+  headers.set("Content-Type", "application/json");
+
+  // VM Agent API runs at https://{sandbox_id}.hopx.dev
+  const response = await fetch(`https://${sandboxId}.hopx.dev${endpoint}`, {
     ...options,
     headers,
   });
@@ -360,16 +387,16 @@ const mcpHandler = createMcpHandler(
 
             return toolResponse(`Execution result:\n${JSON.stringify(data, null, 2)}`);
           } else {
-            // Execute in existing sandbox
+            // Execute in existing sandbox via VM Agent
             if (!sandbox_id) {
               return toolResponse("Error: sandbox_id is required for persistent/rich/background modes");
             }
 
             const endpoint = execMode === "background"
-              ? `/v1/sandboxes/${sandbox_id}/execute/background`
-              : `/v1/sandboxes/${sandbox_id}/execute`;
+              ? `/execute/background`
+              : `/execute`;
 
-            const response = await hopxFetch(endpoint, {
+            const response = await hopxAgentFetch(sandbox_id, endpoint, {
               method: "POST",
               body: JSON.stringify({
                 code,
@@ -452,7 +479,7 @@ const mcpHandler = createMcpHandler(
           const params = new URLSearchParams();
           if (max_results) params.set("max_results", String(max_results));
 
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/processes?${params.toString()}`);
+          const response = await hopxAgentFetch(sandbox_id, `/execute/processes?${params.toString()}`);
           const data = await response.json();
 
           if (!response.ok) {
@@ -478,7 +505,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id, process_id }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/processes/${process_id}`, {
+          const response = await hopxAgentFetch(sandbox_id, `/execute/kill?process_id=${encodeURIComponent(process_id)}`, {
             method: "DELETE",
           });
 
@@ -510,7 +537,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id, command, timeout, working_dir, env }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/commands/run`, {
+          const response = await hopxAgentFetch(sandbox_id, `/commands/run`, {
             method: "POST",
             body: JSON.stringify({
               command,
@@ -549,7 +576,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id, command, timeout, working_dir, env, name }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/commands/background`, {
+          const response = await hopxAgentFetch(sandbox_id, `/commands/background`, {
             method: "POST",
             body: JSON.stringify({
               command,
@@ -588,7 +615,7 @@ const mcpHandler = createMcpHandler(
           const params = new URLSearchParams();
           if (max_results) params.set("max_results", String(max_results));
 
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/system/processes?${params.toString()}`);
+          const response = await hopxAgentFetch(sandbox_id, `/system/processes?${params.toString()}`);
           const data = await response.json();
 
           if (!response.ok) {
@@ -615,7 +642,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id, path }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/files/read?path=${encodeURIComponent(path)}`);
+          const response = await hopxAgentFetch(sandbox_id, `/files/read?path=${encodeURIComponent(path)}`);
           const data = await response.json();
 
           if (!response.ok) {
@@ -642,7 +669,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id, path, content }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/files/write`, {
+          const response = await hopxAgentFetch(sandbox_id, `/files/write`, {
             method: "POST",
             body: JSON.stringify({ path, content }),
           });
@@ -678,7 +705,7 @@ const mcpHandler = createMcpHandler(
           params.set("path", dirPath);
           if (max_results) params.set("max_results", String(max_results));
 
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/files/list?${params.toString()}`);
+          const response = await hopxAgentFetch(sandbox_id, `/files/list?${params.toString()}`);
           const data = await response.json();
 
           if (!response.ok) {
@@ -704,7 +731,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id, path }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/files/exists?path=${encodeURIComponent(path)}`);
+          const response = await hopxAgentFetch(sandbox_id, `/files/exists?path=${encodeURIComponent(path)}`);
           const data = await response.json();
 
           if (!response.ok) {
@@ -730,7 +757,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id, path }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/files/remove`, {
+          const response = await hopxAgentFetch(sandbox_id, `/files/remove`, {
             method: "DELETE",
             body: JSON.stringify({ path }),
           });
@@ -759,7 +786,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id, path }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/files/mkdir`, {
+          const response = await hopxAgentFetch(sandbox_id, `/files/mkdir`, {
             method: "POST",
             body: JSON.stringify({ path }),
           });
@@ -789,7 +816,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/ping`);
+          const response = await hopxAgentFetch(sandbox_id, `/ping`);
           const data = await response.json();
 
           if (!response.ok) {
@@ -814,7 +841,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/info`);
+          const response = await hopxAgentFetch(sandbox_id, `/info`);
           const data = await response.json();
 
           if (!response.ok) {
@@ -840,6 +867,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id, port }) => {
         try {
+          // Preview URL is a control plane operation
           const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/preview?port=${port}`);
           const data = await response.json();
 
@@ -865,14 +893,8 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/agent-url`);
-          const data = await response.json();
-
-          if (!response.ok) {
-            return toolResponse(`Error getting agent URL: ${JSON.stringify(data)}`);
-          }
-
-          return toolResponse(JSON.stringify(data, null, 2));
+          // Return the computed agent URL directly
+          return toolResponse(`Agent URL: https://${sandbox_id}.hopx.dev`);
         } catch (error) {
           return errorResponse("get agent URL", error);
         }
@@ -891,7 +913,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/metrics`);
+          const response = await hopxAgentFetch(sandbox_id, `/system`);
           const data = await response.json();
 
           if (!response.ok) {
@@ -917,7 +939,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/env`);
+          const response = await hopxAgentFetch(sandbox_id, `/env`);
           const data = await response.json();
 
           if (!response.ok) {
@@ -945,7 +967,7 @@ const mcpHandler = createMcpHandler(
       async ({ sandbox_id, env_vars, merge }) => {
         try {
           const method = merge !== false ? "PATCH" : "PUT";
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/env`, {
+          const response = await hopxAgentFetch(sandbox_id, `/env`, {
             method,
             body: JSON.stringify(env_vars),
           });
@@ -974,7 +996,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/env`, {
+          const response = await hopxAgentFetch(sandbox_id, `/env`, {
             method: "DELETE",
           });
 
@@ -1002,7 +1024,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/cache/clear`, {
+          const response = await hopxAgentFetch(sandbox_id, `/cache/clear`, {
             method: "POST",
           });
 
@@ -1029,7 +1051,7 @@ const mcpHandler = createMcpHandler(
       },
       async ({ sandbox_id }) => {
         try {
-          const response = await hopxFetch(`/v1/sandboxes/${sandbox_id}/cache/stats`);
+          const response = await hopxAgentFetch(sandbox_id, `/cache/stats`);
           const data = await response.json();
 
           if (!response.ok) {

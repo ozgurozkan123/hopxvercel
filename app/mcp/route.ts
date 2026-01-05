@@ -15,7 +15,7 @@ function getApiKey(): string | null {
 }
 
 // HOPX API base URL
-const HOPX_API_BASE = "https://api.hopx.ai";
+const HOPX_API_BASE = "https://api.hopx.dev";
 
 // Helper to make authenticated HOPX API calls
 async function hopxFetch(
